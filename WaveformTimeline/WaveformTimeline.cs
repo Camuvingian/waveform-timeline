@@ -50,6 +50,9 @@ namespace WaveformTimeline
 		private double endSelectionRegion = -1;
 
 		private const int PROGRESS_TRIANGLE_WIDTH = 4;
+		private const int TIMELINE_MINOR_TICK_HEIGHT = 2;
+		private const int TIMELINE_MAJOR_TICK_HEIGHT = 4;
+		private const int TIMESTAMP_MARGIN = 5;
 
 		#region Ctor.
 		static WaveformTimeline()
@@ -139,7 +142,80 @@ namespace WaveformTimeline
 			if (waveformPlayer.ChannelLength < intervals.Minor)
 				return;
 
-			// TODO draw some stuff.
+			int minorTickCount = (int)(waveformPlayer.ChannelLength / intervals.Minor);
+			for (int i = 1; i <= minorTickCount; ++i)
+			{
+				Line timelineTick = new Line()
+				{
+					Stroke = TimelineTickBrush,
+					StrokeThickness = 1.0d
+				};
+
+				// We draw major ticks and timestamps at minute marks.
+				double x = ((i * intervals.Minor) / waveformPlayer.ChannelLength) * timelineCanvas.RenderSize.Width;
+				if (i % (intervals.Major / intervals.Minor) == 0)
+				{
+					bool drawTextBlock = false;
+
+					double lastTimeStampAt = 0;
+					if (timestampTextBlocks.Count > 0)
+					{
+						TextBlock lastTextBlock = timestampTextBlocks[timestampTextBlocks.Count - 1];
+						lastTimeStampAt = lastTextBlock.Margin.Left + lastTextBlock.ActualWidth;
+					}
+
+					if (x > lastTimeStampAt + TIMESTAMP_MARGIN)
+						drawTextBlock = true;
+
+					// Are we close enoungh to the timeline end to prevent 
+					// further text blocks being drawn?
+					bool isAtEndOfTimeline = timelineCanvas.RenderSize.Width - x < 28.0;
+					if (drawTextBlock)
+					{
+						timelineTick.X1 = x;
+						timelineTick.Y1 = floor;
+						timelineTick.X2 = x;
+						timelineTick.Y2 = floor - TIMELINE_MAJOR_TICK_HEIGHT;
+
+						if (isAtEndOfTimeline)
+							continue;
+
+						TimeSpan ts = TimeSpan.FromSeconds(i * intervals.Minor);
+						TextBlock timestampTextBlock = new TextBlock()
+						{
+							Margin = new Thickness(x + TIMESTAMP_MARGIN, 0, 0, 0),
+							FontFamily = this.FontFamily,
+							FontStyle = this.FontStyle,
+							FontWeight = this.FontWeight,
+							FontStretch = this.FontStretch,
+							FontSize = this.FontSize,
+							Foreground = this.Foreground,
+							Text = ts.TotalHours >= 1.0 ? 
+								String.Format("{0:00}:{1:00}:{2:00}s", ts.TotalHours, ts.Minutes, ts.Seconds) :
+								String.Format("{0:00}:{1:00}s", ts.TotalMinutes, ts.Seconds)
+						};
+						timestampTextBlocks.Add(timestampTextBlock);
+						timelineCanvas.Children.Add(timestampTextBlock);
+						UpdateLayout(); // Needed so that we know the width of the textblock.
+					}
+					else // We are still on the text block, draw minor instead of major.
+					{
+						timelineTick.X1 = x;
+						timelineTick.Y1 = floor;
+						timelineTick.X2 = x;
+						timelineTick.Y2 = floor - TIMELINE_MINOR_TICK_HEIGHT;
+					}
+				}
+				else
+				{
+					timelineTick.X1 = x;
+					timelineTick.Y1 = floor;
+					timelineTick.X2 = x;
+					timelineTick.Y2 = floor - TIMELINE_MINOR_TICK_HEIGHT;
+				}
+				timelineTicks.Add(timelineTick);
+				timelineCanvas.Children.Add(timelineTick);
+			}
 		}
 
 		/// <summary>
@@ -147,7 +223,37 @@ namespace WaveformTimeline
 		/// </summary>
 		private void UpdateWaveform()
 		{
-			
+			const double minValue = 0.0;
+			const double maxValue = 0.65;
+			const double bdScale = maxValue - minValue;
+
+			if (waveformPlayer == null || waveformPlayer.WaveformData == null ||
+				 waveformCanvas == null || waveformCanvas.RenderSize.Width < 1 || waveformCanvas.RenderSize.Height < 1)
+				return;
+
+			int pointCount = (int)(waveformPlayer.WaveformData.Length / 2.0);
+			double pointThickness = waveformCanvas.RenderSize.Width / pointCount;
+			double waveformHeight = waveformCanvas.RenderSize.Height / 2.0;
+			double centerLineHeight = waveformHeight;
+
+			if (CenterLineBrush != null)
+			{
+				centerLine.X1 = 0;
+				centerLine.X2 = waveformCanvas.RenderSize.Width;
+				centerLine.Y1 = centerLineHeight;
+				centerLine.Y2 = centerLineHeight;
+			}
+
+			double leftRenderHeight, rightRenderHeight;
+			if (waveformPlayer.WaveformData != null && waveformPlayer.WaveformData.Length > 1)
+			{
+				// TODO. Draw the poly line. 
+			}
+			else
+			{
+				leftPath.Data = null;
+				rightPath.Data = null;
+			}
 		}
 
 		/// <summary>
