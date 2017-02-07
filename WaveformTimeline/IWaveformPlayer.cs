@@ -38,5 +38,7 @@ namespace WaveformTimeline
 		/// Gets or sets the ending time for a selection.
 		/// </summary>
 		TimeSpan SelectionEnd { get; set; }
+
+		// TODO add the highlight regions here.
 	}
 }

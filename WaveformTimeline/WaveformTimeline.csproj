@@ -50,6 +50,7 @@
   <ItemGroup>
     <Compile Include="ISoundPlayer.cs" />
     <Compile Include="IWaveformPlayer.cs" />
+    <Compile Include="Models\TimelineIntervals.cs" />
     <Compile Include="Properties\AssemblyInfo.cs">
       <SubType>Code</SubType>
     </Compile>
