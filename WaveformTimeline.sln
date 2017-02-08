@@ -3,7 +3,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 14
 VisualStudioVersion = 14.0.25420.1
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WaveformTimeline", "WaveformTimeline\WaveformTimeline.csproj", "{3A205102-05C7-467D-901D-3A638AAB9879}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WaveformTimeline.Demo", "WaveformTimeline.Demo\WaveformTimeline.Demo.csproj", "{15DAC14C-75DC-4461-AB77-553EBADCF80B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WaveformTimeline.Components", "WaveformTimeline.Components\WaveformTimeline.Components.csproj", "{3A205102-05C7-467D-901D-3A638AAB9879}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -11,6 +13,10 @@ Global
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{15DAC14C-75DC-4461-AB77-553EBADCF80B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{15DAC14C-75DC-4461-AB77-553EBADCF80B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{15DAC14C-75DC-4461-AB77-553EBADCF80B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{15DAC14C-75DC-4461-AB77-553EBADCF80B}.Release|Any CPU.Build.0 = Release|Any CPU
 		{3A205102-05C7-467D-901D-3A638AAB9879}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{3A205102-05C7-467D-901D-3A638AAB9879}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3A205102-05C7-467D-901D-3A638AAB9879}.Release|Any CPU.ActiveCfg = Release|Any CPU

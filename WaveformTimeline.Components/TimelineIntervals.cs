@@ -1,4 +1,4 @@
-﻿namespace WaveformTimeline.Models
+﻿namespace WaveformTimeline.Components
 {
 	/// <summary>
 	/// Class that holds the time intervals for the major and minor ticks on the timeline.

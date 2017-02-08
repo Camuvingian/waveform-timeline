@@ -1,12 +1,13 @@
 ﻿using System;
+using System.ComponentModel;
 
-namespace WaveformTimeline
+namespace WaveformTimeline.Components
 {
 	/// <summary>
 	/// Provides access to sound player functionality needed to
 	/// generate a Waveform.
 	/// </summary>
-	public interface IWaveformPlayer : ISoundPlayer
+	public interface IWaveformPlayer : INotifyPropertyChanged
 	{
 		/// <summary>
 		/// Gets the raw level data for the waveform.

@@ -3,11 +3,11 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
-using WaveformTimeline.Models;
 
-namespace WaveformTimeline
+namespace WaveformTimeline.Components
 {
 	/// <summary>
 	/// Control that displays a stereo waveform and allows the users to select/highlight a timespan. 
@@ -20,7 +20,7 @@ namespace WaveformTimeline
 	[TemplatePart(Name = "PART_Waveform", Type = typeof(Canvas))]
 	[TemplatePart(Name = "PART_Timeline", Type = typeof(Canvas))] 
 	[TemplatePart(Name = "PART_Selection", Type = typeof(Canvas))]
-	[TemplatePart(Name = "PART_Regions", Type = typeof(Canvas))]
+	//[TemplatePart(Name = "PART_Regions", Type = typeof(Canvas))]
 	[TemplatePart(Name = "PART_Progress", Type = typeof(Canvas))]
 	public class WaveformTimeline : Control 
 	{
@@ -29,7 +29,7 @@ namespace WaveformTimeline
 		private Canvas waveformCanvas;
 		private Canvas timelineCanvas;
 		private Canvas selectionCanvas;
-		private Canvas regionsCanvas;
+		//private Canvas regionsCanvas;
 		private Canvas progressCanvas;
 
 		private readonly Path leftPath = new Path();
@@ -46,6 +46,10 @@ namespace WaveformTimeline
 		private readonly Rectangle timelineBackgroundRegion = new Rectangle();
 		private readonly List<Rectangle> highlightRegions = new List<Rectangle>();
 
+		private bool isMouseDown;
+		private Point mouseDownPoint;
+		private Point currentPoint;
+
 		private double startSelectionRegion = -1;
 		private double endSelectionRegion = -1;
 
@@ -53,6 +57,7 @@ namespace WaveformTimeline
 		private const int TIMELINE_MINOR_TICK_HEIGHT = 2;
 		private const int TIMELINE_MAJOR_TICK_HEIGHT = 4;
 		private const int TIMESTAMP_MARGIN = 5;
+		private const int MOUSE_MOVE_TOLERANCE = 3;
 
 		#region Ctor.
 		static WaveformTimeline()
@@ -61,6 +66,174 @@ namespace WaveformTimeline
 				typeof(WaveformTimeline), new FrameworkPropertyMetadata(typeof(WaveformTimeline)));
 		}
 		#endregion // Ctor.
+
+		#region Template Overrides.
+		/// <summary>
+		/// When overridden in a derived class, is invoked whenever application code
+		/// or internal processes call System.Windows.FrameworkElement.ApplyTemplate().
+		/// </summary>
+		public override void OnApplyTemplate()
+		{
+			base.OnApplyTemplate();
+
+			waveformCanvas = GetTemplateChild("PART_Waveform") as Canvas;
+			waveformCanvas.CacheMode = new BitmapCache();
+
+			// Used to make the transparent regions clickable.
+			waveformCanvas.Background = new SolidColorBrush(Colors.Transparent);
+
+			waveformCanvas.Children.Add(centerLine);
+			waveformCanvas.Children.Add(leftPath);
+			waveformCanvas.Children.Add(rightPath);
+
+			timelineCanvas = GetTemplateChild("PART_Timeline") as Canvas;
+			timelineCanvas.Children.Add(timelineBackgroundRegion);
+			timelineCanvas.SizeChanged += TimelineCanvas_SizeChanged;
+
+			selectionCanvas = GetTemplateChild("PART_Selection") as Canvas;
+			selectionCanvas.Children.Add(selectionRegion);
+
+			progressCanvas = GetTemplateChild("PART_Progress") as Canvas;
+			progressCanvas.Children.Add(progressIndicator);
+			progressCanvas.Children.Add(progressLine);
+
+			UpdateWaveformCacheScaling();
+		}
+
+		/// <summary>
+		/// Called whenever the control's template changes. 
+		/// </summary>
+		/// <param name="oldTemplate">The old template</param>
+		/// <param name="newTemplate">The new template</param>
+		protected override void OnTemplateChanged(ControlTemplate oldTemplate, ControlTemplate newTemplate)
+		{
+			base.OnTemplateChanged(oldTemplate, newTemplate);
+
+			if (waveformCanvas != null)
+				waveformCanvas.Children.Clear();
+
+			if (timelineCanvas != null)
+			{
+				timelineCanvas.SizeChanged -= TimelineCanvas_SizeChanged;
+				timelineCanvas.Children.Clear();
+			}
+
+			if (selectionCanvas != null)
+				selectionCanvas.Children.Clear();
+
+			if (progressCanvas != null)
+				progressCanvas.Children.Clear();
+		}
+		#endregion // Template Overrides.
+
+		#region Event Overrides.
+		/// <summary>
+		/// Raises the SizeChanged event, using the specified information as part of the eventual event data. 
+		/// </summary>
+		/// <param name="sizeInfo">Details of the old and new size involved in the change.</param>
+		protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
+		{
+			base.OnRenderSizeChanged(sizeInfo);
+			UpdateWaveformCacheScaling();
+			UpdateAllRegions();
+		}
+
+		/// <summary>
+		/// Invoked when an unhandled MouseLeftButtonDown routed event is raised on this element. 
+		/// Implement this method to add class handling for this event.
+		/// </summary>
+		/// <param name="e">The MouseButtonEventArgs that contains the event data. The event 
+		/// data reports that the left mouse button was pressed.</param>
+		protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
+		{
+			base.OnMouseLeftButtonDown(e);
+			CaptureMouse();
+			isMouseDown = true;
+			mouseDownPoint = e.GetPosition(waveformCanvas);
+		}
+
+		/// <summary>
+		/// Invoked when an unhandled MouseLeftButtonUp routed event reaches an element in 
+		/// its route that is derived from this class. Implement this method to add class 
+		/// handling for this event.
+		/// </summary>
+		/// <param name="e">The MouseButtonEventArgs that contains the event data. The event 
+		/// data reports that the left mouse button was released.</param>
+		protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
+		{
+			base.OnMouseLeftButtonUp(e);
+			if (!isMouseDown)
+				return;
+
+			bool updateRepeatRegion = false;
+			isMouseDown = false;
+			ReleaseMouseCapture();
+			if (Math.Abs(currentPoint.X - mouseDownPoint.X) < MOUSE_MOVE_TOLERANCE)
+			{
+				if (IsPointInSelectionRegion(mouseDownPoint))
+				{
+					double position = (currentPoint.X / RenderSize.Width) * waveformPlayer.ChannelLength;
+					waveformPlayer.ChannelPosition = Math.Min(waveformPlayer.ChannelLength, Math.Max(0, position));
+				}
+				else
+				{
+					waveformPlayer.SelectionBegin = TimeSpan.Zero;
+					waveformPlayer.SelectionEnd = TimeSpan.Zero;
+					double position = (currentPoint.X / RenderSize.Width) * waveformPlayer.ChannelLength;
+					waveformPlayer.ChannelPosition = Math.Min(waveformPlayer.ChannelLength, Math.Max(0, position));
+					startSelectionRegion = -1;
+					endSelectionRegion = -1;
+					updateRepeatRegion = true;
+				}
+			}
+			else
+			{
+				waveformPlayer.SelectionBegin = TimeSpan.FromSeconds(startSelectionRegion);
+				waveformPlayer.SelectionEnd = TimeSpan.FromSeconds(endSelectionRegion);
+				double position = startSelectionRegion;
+				waveformPlayer.ChannelPosition = Math.Min(waveformPlayer.ChannelLength, Math.Max(0, position));
+				updateRepeatRegion = true;
+			}
+
+			if (updateRepeatRegion)
+				UpdateSelectionRegion();
+		}
+
+		/// <summary>
+		/// Invoked when an unhandled Mouse.MouseMove attached event reaches an element in 
+		/// its route that is derived from this class. Implement this method to add class 
+		/// handling for this event.
+		/// </summary>
+		/// <param name="e">The MouseEventArgs that contains the event data.</param>
+		protected override void OnMouseMove(MouseEventArgs e)
+		{
+			base.OnMouseMove(e);
+			currentPoint = e.GetPosition(waveformCanvas);
+
+			if (isMouseDown && AllowSelectionRegions)
+			{
+				if (Math.Abs(currentPoint.X - mouseDownPoint.X) > MOUSE_MOVE_TOLERANCE)
+				{
+					if (mouseDownPoint.X < currentPoint.X)
+					{
+						startSelectionRegion = (mouseDownPoint.X / RenderSize.Width) * waveformPlayer.ChannelLength;
+						endSelectionRegion = (currentPoint.X / RenderSize.Width) * waveformPlayer.ChannelLength;
+					}
+					else
+					{
+						startSelectionRegion = (currentPoint.X / RenderSize.Width) * waveformPlayer.ChannelLength;
+						endSelectionRegion = (mouseDownPoint.X / RenderSize.Width) * waveformPlayer.ChannelLength;
+					}
+				}
+				else
+				{
+					startSelectionRegion = -1;
+					endSelectionRegion = -1;
+				}
+				UpdateSelectionRegion();
+			}
+		}
+		#endregion // Event Overrides.
 
 		#region Public Methods and Event Handlers.
 		/// <summary>
@@ -100,13 +273,22 @@ namespace WaveformTimeline
 			}
 		}
 
-
+		private void TimelineCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
+		{
+			UpdateTimeline();
+		}
 		#endregion // Public Methods and Event Handlers.
 
 		#region Private Utility and Rendering Methods.
+		/// <summary>
+		/// Render all regions.
+		/// </summary>
 		private void UpdateAllRegions()
 		{
-			throw new NotImplementedException();
+			UpdateSelectionRegion();
+			CreateProgressIndicator();
+			UpdateTimeline();
+			UpdateWaveform();
 		}
 
 		/// <summary>
@@ -225,7 +407,7 @@ namespace WaveformTimeline
 		{
 			const double minValue = 0.0;
 			const double maxValue = 0.65;
-			const double bdScale = maxValue - minValue;
+			const double dbScale = maxValue - minValue;
 
 			if (waveformPlayer == null || waveformPlayer.WaveformData == null ||
 				 waveformCanvas == null || waveformCanvas.RenderSize.Width < 1 || waveformCanvas.RenderSize.Height < 1)
@@ -247,7 +429,44 @@ namespace WaveformTimeline
 			double leftRenderHeight, rightRenderHeight;
 			if (waveformPlayer.WaveformData != null && waveformPlayer.WaveformData.Length > 1)
 			{
-				// TODO. Draw the poly line. 
+				double x = 0.0;
+
+				PolyLineSegment leftWaveformPolyLine = new PolyLineSegment();
+				leftWaveformPolyLine.Points.Add(new Point(0, centerLineHeight));
+
+				PolyLineSegment rightWaveformPolyLine = new PolyLineSegment();
+				rightWaveformPolyLine.Points.Add(new Point(0, centerLineHeight));
+				
+				for (int i = 0; i < waveformPlayer.WaveformData.Length; i += 2)
+				{
+					x = (i / 2) * pointThickness;
+
+					leftRenderHeight = ((waveformPlayer.WaveformData[i] - minValue) / dbScale) * waveformHeight;
+					leftWaveformPolyLine.Points.Add(new Point(x, centerLineHeight - leftRenderHeight));
+
+					rightRenderHeight = ((waveformPlayer.WaveformData[i + 1] - minValue) / dbScale) * waveformHeight;
+					rightWaveformPolyLine.Points.Add(new Point(x, centerLineHeight + rightRenderHeight));
+				}
+
+				leftWaveformPolyLine.Points.Add(new Point(x, centerLineHeight));
+				leftWaveformPolyLine.Points.Add(new Point(0, centerLineHeight));
+
+				rightWaveformPolyLine.Points.Add(new Point(x, centerLineHeight));
+				rightWaveformPolyLine.Points.Add(new Point(0, centerLineHeight));
+
+				// Geometries/Paths.
+				PathGeometry leftGeometry = new PathGeometry();
+				PathFigure leftPathFigure = new PathFigure();
+				leftPathFigure.Segments.Add(leftWaveformPolyLine);
+				leftGeometry.Figures.Add(leftPathFigure);
+
+				PathGeometry rightGeometry = new PathGeometry();
+				PathFigure rightPathFigure = new PathFigure();
+				rightPathFigure.Segments.Add(rightWaveformPolyLine);
+				rightGeometry.Figures.Add(rightPathFigure);
+
+				leftPath.Data = leftGeometry;
+				rightPath.Data = rightGeometry;
 			}
 			else
 			{
@@ -330,7 +549,7 @@ namespace WaveformTimeline
 			}
 			selectionRegion.Margin = new Thickness(startX, 0, 0, 0);
 			selectionRegion.Width = endX - startX;
-			selectionRegion.Height = selectionCanvas.RenderSize.Height; // TODO Need to override templates.
+			selectionRegion.Height = selectionCanvas.RenderSize.Height;
 		}
 
 		private void UpdateWaveformCacheScaling()
@@ -346,10 +565,41 @@ namespace WaveformTimeline
 			BitmapCache waveformCache = (BitmapCache)waveformCanvas.CacheMode;
 			if (AutoScaleWaveformCache)
 			{
-				// TODO Get transform scale and render at that scale.
+				double totalTransformScale = GetTotalTransformScale();
+				if (waveformCache.RenderAtScale != totalTransformScale)
+					waveformCache.RenderAtScale = totalTransformScale;
 			}
 			else
 				waveformCache.RenderAtScale = 1.0;
+		}
+
+		private double GetTotalTransformScale()
+		{
+			double totalTransform = 1.0;
+			DependencyObject currentVisualTreeElement = this;
+			do
+			{
+				Visual visual = currentVisualTreeElement as Visual;
+				if (visual != null)
+				{
+					Transform transform = VisualTreeHelper.GetTransform(visual);
+
+					// This condition is a way of determining if it
+					// was a uniform scale transform. Is there some better way?
+					if (transform != null &&
+						 transform.Value.M12 == 0 &&
+						 transform.Value.M21 == 0 &&
+						 transform.Value.OffsetX == 0 &&
+						 transform.Value.OffsetY == 0 &&
+						 transform.Value.M11 == transform.Value.M22)
+					{
+						totalTransform *= transform.Value.M11;
+					}
+				}
+				currentVisualTreeElement = VisualTreeHelper.GetParent(currentVisualTreeElement);
+			}
+			while (currentVisualTreeElement != null);
+			return totalTransform;
 		}
 
 		private bool IsPointInSelectionRegion(Point p)
@@ -365,6 +615,35 @@ namespace WaveformTimeline
 			return p.X >= regionLeft && p.X < regionRight;
 		}
 		#endregion // Private Utility and Rendering Methods.
+
+		#region Dependency Properties.
+		#region Dependency Property Waveform Player Binding.
+		public IWaveformPlayer WaveformPlayer
+		{
+			get { return (IWaveformPlayer)GetValue(WaveformPlayerProperty); }
+			set { SetValue(WaveformPlayerProperty, value); }
+		}
+
+		public static readonly DependencyProperty WaveformPlayerProperty =
+			 DependencyProperty.Register("WaveformPlayer", typeof(IWaveformPlayer),
+				 typeof(WaveformTimeline), new PropertyMetadata(null, OnWaveformPlayerChanged));
+
+		private static void OnWaveformPlayerChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+		{
+			WaveformTimeline waveformTimeline = d as WaveformTimeline;
+			if (waveformTimeline != null)
+				waveformTimeline.OnWaveformPlayerChanged((IWaveformPlayer)e.NewValue);
+		}
+
+		/// <summary>
+		/// When a new waveform player is bound, re-register.
+		/// </summary>
+		/// <param name="waveformPlayer">The new waveform player.</param>
+		protected virtual void OnWaveformPlayerChanged(IWaveformPlayer waveformPlayer)
+		{
+			RegisterWaveformPlayer(waveformPlayer);
+		}
+		#endregion // Dependency Property Waveform Player Binding.
 
 		#region Dependency Properties Left Level Waveform Brushes.
 		[Category("Brushes")]
@@ -396,7 +675,7 @@ namespace WaveformTimeline
 		protected virtual void OnLeftLevelBrushChanged(Brush oldValue, Brush newValue)
 		{
 			leftPath.Fill = LeftLevelBrush;
-			//UpdateWaveform();
+			UpdateWaveform();
 		}
 
 		private static object OnCoerceLeftLevelBrush(DependencyObject o, object baseValue)
@@ -431,7 +710,7 @@ namespace WaveformTimeline
 		/// </summary>
 		public static readonly DependencyProperty LeftLevelStrokeBrushProperty =
 			 DependencyProperty.Register("LeftLevelStrokeBrush", typeof(Brush), typeof(WaveformTimeline),
-				 new UIPropertyMetadata(new SolidColorBrush(Colors.Green), 
+				 new UIPropertyMetadata(new SolidColorBrush(Colors.Green),
 					 OnLeftLevelStrokeBrushChanged, OnCoerceLeftLevelStrokeBrush));
 
 		private static void OnLeftLevelStrokeBrushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -449,7 +728,7 @@ namespace WaveformTimeline
 		protected virtual void OnLeftLevelStrokeBrushChanged(Brush oldValue, Brush newValue)
 		{
 			leftPath.Stroke = LeftLevelStrokeBrush;
-			//UpdateWaveform();
+			UpdateWaveform();
 		}
 
 		private static object OnCoerceLeftLevelStrokeBrush(DependencyObject o, object baseValue)
@@ -474,7 +753,7 @@ namespace WaveformTimeline
 		#endregion // Dependency Properties Left Level Waveform Brushes.
 
 		#region Dependency Properties Right Level Waveform Brushes.
-		[Category("Brushes")]		
+		[Category("Brushes")]
 		public Brush RightLevelBrush
 		{
 			get { return (Brush)GetValue(RightLevelBrushProperty); }
@@ -503,14 +782,14 @@ namespace WaveformTimeline
 		protected virtual void OnRightLevelBrushChanged(Brush oldValue, Brush newValue)
 		{
 			rightPath.Fill = RightLevelBrush;
-			//UpdateWaveform();
+			UpdateWaveform();
 		}
 
 		private static object OnCoerceRightLevelBrush(DependencyObject d, object baseValue)
 		{
 			WaveformTimeline waveformTimeline = d as WaveformTimeline;
 			return waveformTimeline != null ?
-				waveformTimeline.OnCoerceRightLevelBrush((Brush)baseValue) : 
+				waveformTimeline.OnCoerceRightLevelBrush((Brush)baseValue) :
 				baseValue;
 		}
 
@@ -536,7 +815,7 @@ namespace WaveformTimeline
 		/// </summary>
 		public static readonly DependencyProperty RightLevelStrokeBrushProperty =
 			 DependencyProperty.Register("RightLevelStrokeBrush", typeof(Brush), typeof(WaveformTimeline),
-				 new UIPropertyMetadata(new SolidColorBrush(Colors.Purple), 
+				 new UIPropertyMetadata(new SolidColorBrush(Colors.Purple),
 					 OnRightLevelStrokeBrushChanged, OnCoerceRightLevelStrokeBrush));
 
 		private static void OnRightLevelStrokeBrushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -554,7 +833,7 @@ namespace WaveformTimeline
 		protected virtual void OnRightLevelStrokeBrushChanged(Brush oldValue, Brush newValue)
 		{
 			rightPath.Stroke = RightLevelStrokeBrush;
-			//UpdateWaveform();
+			UpdateWaveform();
 		}
 
 		private static object OnCoerceRightLevelStrokeBrush(DependencyObject d, object baseValue)
@@ -584,9 +863,11 @@ namespace WaveformTimeline
 			set { SetValue(ProgressBarBrushProperty, value); }
 		}
 
-		// Using a DependencyProperty as the backing store for ProgressBarBrush.  This enables animation, styling, binding, etc...
+		/// <summary>
+		/// Identifies the <see cref="ProgressBarBrush" /> dependency property. 
+		/// </summary>
 		public static readonly DependencyProperty ProgressBarBrushProperty =
-			 DependencyProperty.Register("ProgressBarBrush", typeof(Brush), typeof(WaveformTimeline), 
+			 DependencyProperty.Register("ProgressBarBrush", typeof(Brush), typeof(WaveformTimeline),
 					new UIPropertyMetadata(new SolidColorBrush(Colors.Gold), OnProgressBrushChanged, OnCoerceProgressBrush));
 
 		private static void OnProgressBrushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -605,14 +886,14 @@ namespace WaveformTimeline
 		{
 			progressIndicator.Fill = ProgressBarBrush;
 			progressLine.Stroke = ProgressBarBrush;
-			//CreateProgressIndicator(); //TODO
+			CreateProgressIndicator();
 		}
 
 		private static object OnCoerceProgressBrush(DependencyObject d, object baseValue)
 		{
 			WaveformTimeline waveformTimeline = d as WaveformTimeline;
-			return waveformTimeline != null ? 
-				waveformTimeline.OnCoerceProgressBarBrush((Brush)baseValue) : 
+			return waveformTimeline != null ?
+				waveformTimeline.OnCoerceProgressBarBrush((Brush)baseValue) :
 				baseValue;
 		}
 
@@ -640,7 +921,7 @@ namespace WaveformTimeline
 		/// Identifies the <see cref="ProgressBarThickness" /> dependency property. 
 		/// </summary>
 		public static readonly DependencyProperty ProgressBarThicknessProperty =
-			 DependencyProperty.Register("ProgressBarThickness", typeof(double), typeof(WaveformTimeline), 
+			 DependencyProperty.Register("ProgressBarThickness", typeof(double), typeof(WaveformTimeline),
 				 new UIPropertyMetadata(2.0d, OnProgressBarThicknessChanged, OnCoerceProgressBarThickness));
 
 		private static void OnProgressBarThicknessChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -658,7 +939,7 @@ namespace WaveformTimeline
 		protected virtual void OnProgressBarThicknessChanged(double oldValue, double newValue)
 		{
 			progressLine.StrokeThickness = ProgressBarThickness;
-			//CreateProgressIndicator();
+			CreateProgressIndicator();
 		}
 
 		private static object OnCoerceProgressBarThickness(DependencyObject d, object baseValue)
@@ -696,10 +977,9 @@ namespace WaveformTimeline
 		/// Identifies the <see cref="CenterLineBrush" /> dependency property. 
 		/// </summary>
 		public static readonly DependencyProperty CenterLineBrushProperty =
-			 DependencyProperty.Register("CenterLineBrush", typeof(Brush), typeof(WaveformTimeline), 
-				 new UIPropertyMetadata(new SolidColorBrush(Colors.Black), 
+			 DependencyProperty.Register("CenterLineBrush", typeof(Brush), typeof(WaveformTimeline),
+				 new UIPropertyMetadata(new SolidColorBrush(Colors.Black),
 					 OnCenterLineBrushChanged, OnCoerceCenterLineBrush));
-
 
 		private static void OnCenterLineBrushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
 		{
@@ -716,14 +996,14 @@ namespace WaveformTimeline
 		protected virtual void OnCenterLineBrushChanged(Brush oldValue, Brush newValue)
 		{
 			centerLine.Stroke = CenterLineBrush;
-			//UpdateWaveform();
+			UpdateWaveform();
 		}
 
 		private static object OnCoerceCenterLineBrush(DependencyObject d, object baseValue)
 		{
 			WaveformTimeline waveformTimeline = d as WaveformTimeline;
-			return waveformTimeline != null ? 
-				waveformTimeline.OnCoerceCenterLineBrush((Brush)baseValue) : 
+			return waveformTimeline != null ?
+				waveformTimeline.OnCoerceCenterLineBrush((Brush)baseValue) :
 				baseValue;
 		}
 
@@ -750,8 +1030,8 @@ namespace WaveformTimeline
 		/// <summary>
 		/// Identifies the <see cref="CenterLineThickness" /> dependency property. 
 		/// </summary>
-		public static readonly DependencyProperty CenterLineThicknessProperty = 
-			DependencyProperty.Register("CenterLineThickness", typeof(double), typeof(WaveformTimeline), 
+		public static readonly DependencyProperty CenterLineThicknessProperty =
+			DependencyProperty.Register("CenterLineThickness", typeof(double), typeof(WaveformTimeline),
 				new UIPropertyMetadata(1.0d, OnCenterLineThicknessChanged, OnCoerceCenterLineThickness));
 
 		private static void OnCenterLineThicknessChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -769,7 +1049,7 @@ namespace WaveformTimeline
 		protected virtual void OnCenterLineThicknessChanged(double oldValue, double newValue)
 		{
 			centerLine.StrokeThickness = CenterLineThickness;
-			//UpdateWaveform();
+			UpdateWaveform();
 		}
 
 		private static object OnCoerceCenterLineThickness(DependencyObject d, object baseValue)
@@ -808,7 +1088,7 @@ namespace WaveformTimeline
 		/// </summary>
 		public static readonly DependencyProperty SelectionRegionBrushProperty =
 			DependencyProperty.Register("SelectionRegionBrush", typeof(Brush), typeof(WaveformTimeline),
-				new UIPropertyMetadata(new SolidColorBrush(Color.FromArgb(129, 246, 255, 0)), 
+				new UIPropertyMetadata(new SolidColorBrush(Color.FromArgb(129, 246, 255, 0)),
 					OnSelectionRegionBrushChanged, OnCoerceSelectionRegionBrush));
 
 		private static void OnSelectionRegionBrushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -826,13 +1106,13 @@ namespace WaveformTimeline
 		protected virtual void OnSelectionRegionBrushChanged(Brush oldValue, Brush newValue)
 		{
 			selectionRegion.Fill = SelectionRegionBrush;
-			//UpdateSelectionRegion();
+			UpdateSelectionRegion();
 		}
 
 		private static object OnCoerceSelectionRegionBrush(DependencyObject d, object baseValue)
 		{
 			WaveformTimeline waveformTimeline = d as WaveformTimeline;
-			return waveformTimeline != null ? 
+			return waveformTimeline != null ?
 				waveformTimeline.OnCoerceRepeatRegionBrush((Brush)baseValue) :
 				baseValue;
 		}
@@ -889,8 +1169,8 @@ namespace WaveformTimeline
 		private static object OnCoerceAllowSelectionRegions(DependencyObject d, object baseValue)
 		{
 			WaveformTimeline waveformTimeline = d as WaveformTimeline;
-			return waveformTimeline != null ? 
-				waveformTimeline.OnCoerceAllowSelectionRegions((bool)baseValue) : 
+			return waveformTimeline != null ?
+				waveformTimeline.OnCoerceAllowSelectionRegions((bool)baseValue) :
 				baseValue;
 		}
 
@@ -912,16 +1192,16 @@ namespace WaveformTimeline
 		[Category("Brushes")]
 		public Brush TimelineTickBrush
 		{
-			get { return (Brush)GetValue(TimelineTickBrushProperty);	}
+			get { return (Brush)GetValue(TimelineTickBrushProperty); }
 			set { SetValue(TimelineTickBrushProperty, value); }
 		}
 
 		/// <summary>
 		/// Identifies the <see cref="TimelineTickBrush"/> dependency property. 
 		/// </summary>
-		public static readonly DependencyProperty TimelineTickBrushProperty = 
-			DependencyProperty.Register("TimelineTickBrush", typeof(Brush), typeof(WaveformTimeline), 
-				new UIPropertyMetadata(new SolidColorBrush(Colors.Black), 
+		public static readonly DependencyProperty TimelineTickBrushProperty =
+			DependencyProperty.Register("TimelineTickBrush", typeof(Brush), typeof(WaveformTimeline),
+				new UIPropertyMetadata(new SolidColorBrush(Colors.Black),
 					OnTimelineTickBrushChanged, OnCoerceTimelineTickBrush));
 
 		private static void OnTimelineTickBrushChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -938,14 +1218,14 @@ namespace WaveformTimeline
 		/// <param name="newValue">The new value of <see cref="TimelineTickBrush"/></param>
 		protected virtual void OnTimelineTickBrushChanged(Brush oldValue, Brush newValue)
 		{
-			// UpdateTimeline();
+			UpdateTimeline();
 		}
 
 		private static object OnCoerceTimelineTickBrush(DependencyObject d, object baseValue)
 		{
 			WaveformTimeline waveformTimeline = d as WaveformTimeline;
-			return waveformTimeline != null ? 
-				waveformTimeline.OnCoerceTimelineTickBrush((Brush)baseValue) : 
+			return waveformTimeline != null ?
+				waveformTimeline.OnCoerceTimelineTickBrush((Brush)baseValue) :
 				baseValue;
 		}
 
@@ -1003,14 +1283,14 @@ namespace WaveformTimeline
 		/// <param name="newValue">The new value of <see cref="AutoScaleWaveformCache"/></param>
 		protected virtual void OnAutoScaleWaveformCacheChanged(bool oldValue, bool newValue)
 		{
-			//UpdateWaveformCacheScaling();
+			UpdateWaveformCacheScaling();
 		}
 
 		private static object OnCoerceAutoScaleWaveformCache(DependencyObject d, object baseValue)
 		{
 			WaveformTimeline waveformTimeline = d as WaveformTimeline;
-			return waveformTimeline != null ? 
-				waveformTimeline.OnCoerceAutoScaleWaveformCache((bool)baseValue) : 
+			return waveformTimeline != null ?
+				waveformTimeline.OnCoerceAutoScaleWaveformCache((bool)baseValue) :
 				baseValue;
 		}
 
@@ -1026,7 +1306,7 @@ namespace WaveformTimeline
 		#endregion // Dependency Properties for [Auto-Scale] Waveform.
 
 		// TODO. Add dependency properties for highlight regions. 
-
+		#endregion // Dependency Properties.
 
 	}
 }
